@@ -36,6 +36,7 @@ description: "Use after pushing in a repo whose git hooks call roborev, or when 
 ## Reading a verdict
 
 - **Judge the stored verdict, not the review's `Agent assessment:` line.** roborev re-derives the verdict from `review_min_severity` (`internal/review/runner.go`), so with a `medium` gate a review with only Low findings prints `Agent assessment: Fail` but is stored `P`. The stored verdict is the `Verdict` column of `roborev list`, `.job.verdict` in `roborev show --json`, or the script's exit code. Low findings don't block or trigger the hook, but read them.
+- **A clean verdict is not a clean merge.** roborev is the per-push first line: it catches local bugs within about a minute and misses design-level problems across commits. Pre-merge review and the PR's own review threads gate the merge separately.
 - **A `failed` status is not a failed review.** It is an agent error (quota, empty diff): no verdict, nothing to close. `roborev wait` exits 1 on it too, which is why the script decides from the job's state instead.
 
 ## Handling findings

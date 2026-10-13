@@ -15,9 +15,9 @@ A Claude Code companion for [roborev](https://github.com/kenn-io/roborev), the A
 
 4. **Set up each repo**: `roborev init` installs the post-commit, post-rewrite, and pre-push hooks and starts the daemon (check with `roborev status`). Then add a `.roborev.toml` and a root `REVIEW.md` ([below](#configuration-best-practices)).
 5. **Tell Claude when to use it**: roborev's git hooks run silently, so add one line to your own `~/.claude/CLAUDE.md` (not a repo's shared `CLAUDE.md`, since teammates may not have roborev or this plugin): "In a repo whose git hooks call roborev (`grep -l roborev "$(git rev-parse --git-common-dir)"/hooks/*`), after pushing, run `roborev-wait-push` and act on its verdict; load the `roborev-companion:working-with-roborev` skill first."
-6. **Verify**: commit and push something trivial, then run `roborev-wait-push`; it should end with `roborev-wait-push: PASS (exit 0)` or a FAIL.
+6. **Verify**: `roborev check-agents` confirms the review agents run; then commit and push something trivial and run `roborev-wait-push`; it should end with `roborev-wait-push: PASS (exit 0)` or a FAIL.
 
-After a roborev upgrade (`roborev update`), rerun `roborev init` in each repo and `roborev agent-hook install`.
+To upgrade: read the changelog, run `roborev update`, then rerun `roborev init` in each repo and `roborev agent-hook install`. roborev's telemetry is on by default and is controlled only by the daemon's environment: set `ROBOREV_TELEMETRY_ENABLED=0` where the daemon starts to turn it off.
 
 ## What it provides
 
@@ -33,7 +33,7 @@ Set keys with `roborev config set --global <key> <value>` (the daemon hot-reload
 ```toml
 # ~/.roborev/config.toml
 default_agent = 'codex'              # a different model family from the agent writing the code
-default_model = '<model>'            # explicit, so an upgrade or a changed agent default can't move it
+default_model = '<model>'            # explicit: roborev ignores ~/.codex/config.toml, and an upgrade can't move it
 review_reasoning = 'medium'          # explicit: empty means "thorough"
 review_context_count = 3             # prior reviews and their comments feed the next review
 review_min_severity = 'medium'       # the stored verdict is Fail only for a medium-or-higher finding
@@ -45,6 +45,11 @@ agent_quota_cooldown = '30m0s'       # how long to stay on the backup before ret
 
 [agent_hook]
 failed_review_threshold = 1          # one open Fail surfaces at the next Stop (default 4)
+
+# Failover to the backup agent is silent and has no event of its own: detect it from {agent}
+[[hooks]]
+event = "review.*"
+command = "<script> {agent} {job_id} {repo_name}"   # exits quietly for the primary; otherwise logs one line per job; never fails
 ```
 
 - **One explicit model and effort default, overrides by exception.** The per-push review is the frequent first line, so it runs at a moderate default; depth belongs to the pre-merge review. The daemon resolves model and reasoning from config when it enqueues, so nothing in the push can raise one push's level. For a risky push, let the automatic job run, then add one deeper pass over the range: `roborev review --since <base> --reasoning xhigh`. For a trivial push, mark every commit in it with `[no-roborev]` (the per-repo config below lists that marker).
@@ -63,6 +68,12 @@ failed_review_threshold = 1          # one open Fail surfaces at the next Stop (
 
   With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds, so each push gets one verdict; a branch also flushes on its own every 20 commits. A failed flush never blocks the push; the reason is in `~/.roborev/post-commit.log`. Trade-off: a rebase or a merge from the default branch widens the next range (the skill covers handling that). Committing the file gives every branch and worktree the same settings, and it's inert for teammates without roborev. If teammates shouldn't get batching, keep the file untracked instead and list it in `.git/info/exclude`: a linked worktree with no copy of its own then reads the main checkout's file.
 - **An absolute `core.hooksPath`.** If the repo commits its hooks directory (`core.hooksPath` pointing at a tracked `.githooks/`), roborev installs into it and edits tracked files: either commit its changes (they no-op where roborev isn't installed) or keep its hook files (`post-commit`, `post-rewrite`, `pre-push`) untracked and listed in `.git/info/exclude`. Keep `core.hooksPath` absolute, pointing at the main checkout's hooks directory, so linked worktrees share the roborev hooks.
+  Never hide a roborev edit with `git update-index --skip-worktree`: it blocks `git pull` when the tracked hook changes upstream. Check with `git config --get core.hooksPath`, `git ls-files -v <hooks-dir>` (no `S` flags), and `git status --short <hooks-dir>` (clean).
+
+### Optional
+
+- `[auto_design_review]` (off by default) queues a design-focused review on commits touching `trigger_paths`: a post-hoc smell check, not a pre-code gate.
+- `roborev mcp serve` exposes jobs, reviews, comment, close, and snooze as MCP tools; it can't start reviews and has no range lookup.
 
 ## Development
 
