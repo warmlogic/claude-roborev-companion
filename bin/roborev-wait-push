@@ -13,6 +13,8 @@
 # Exit: 0 PASS, or FAIL closed with a comment; 1 FAIL open, or closed with no comment;
 #       2 no job found within the retry window; 3 usage/git/daemon error;
 #       4 the job finished without a verdict (agent error, canceled).
+#       The last line of output, on every path, names the result and the exit code
+#       ("roborev-wait-push: PASS (exit 0)"), so `| tail -1` always shows it (stdout, after everything else).
 # Env:  ROBOREV_WAIT_PUSH_TIMEOUT  seconds to keep looking for the job (default 60)
 set -euo pipefail
 
@@ -20,7 +22,25 @@ timeout="${ROBOREV_WAIT_PUSH_TIMEOUT:-60}"
 interval=3
 ref="${1:-HEAD}"
 
-die() { echo "roborev-wait-push: $1" >&2; exit "${2:-3}"; }
+# Every exit goes through the EXIT trap, which prints the one final line. finish
+# sets its label; an exit that didn't come through finish (a `set -e` failure)
+# is reported as ERROR with exit 3, keeping the exit-code contract.
+result=""
+# shellcheck disable=SC2329  # invoked by the EXIT trap
+on_exit() {
+  local rc=$?
+  if [ -z "$result" ]; then result=ERROR; rc=3; fi
+  echo "roborev-wait-push: $result (exit $rc)"
+  exit "$rc"
+}
+trap on_exit EXIT
+finish() { result=$1; exit "$2"; }
+
+die() {
+  local code="${2:-3}"
+  echo "roborev-wait-push: $1" >&2
+  if [ "$code" -eq 2 ]; then finish "NO JOB" 2; else finish ERROR "$code"; fi
+}
 
 [ $# -le 1 ] || die "usage: roborev-wait-push [ref]"
 command -v roborev >/dev/null || die "roborev not on PATH"
@@ -62,15 +82,21 @@ state=$(list_jobs | jq -r --argjson id "$job_id" '
 read -r status verdict closed <<<"$state"
 
 case "$status:$verdict:$closed" in
-  done:P:*)    exit 0 ;;
+  done:P:*)    finish PASS 0 ;;
   done:F:true)
     # A close counts as a disposition only with its reason on record.
     comments=$(roborev show --job "$job_id" --json | jq '.comments | length') \
       || die "could not read job $job_id's comments"
     if [ "$comments" -gt 0 ]; then
-      echo "roborev-wait-push: job $job_id FAIL is closed with a comment (dispositioned); not blocking" >&2; exit 0
+      echo "roborev-wait-push: job $job_id FAIL is closed with a comment (dispositioned); not blocking" >&2
+      finish "PASS, FAIL closed with comment" 0
     fi
-    echo "roborev-wait-push: job $job_id FAIL was closed with no comment; add the reason (roborev comment --job $job_id -m ...)" >&2; exit 1 ;;
-  done:F:*)    echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2; exit 1 ;;
-  *)           echo "roborev-wait-push: job $job_id ended '$status' with no verdict; not a review result" >&2; exit 4 ;;
+    echo "roborev-wait-push: job $job_id FAIL was closed with no comment; add the reason (roborev comment --job $job_id -m ...)" >&2
+    finish "FAIL closed without comment" 1 ;;
+  done:F:*)
+    echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2
+    finish "FAIL open" 1 ;;
+  *)
+    echo "roborev-wait-push: job $job_id ended '$status' with no verdict; not a review result" >&2
+    finish "NO VERDICT, status $status" 4 ;;
 esac
