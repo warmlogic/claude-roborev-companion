@@ -1,0 +1,8 @@
+{
+  "name": "roborev-companion",
+  "description": "Companion to roborev per-push AI review: roborev-wait-push waits on a push's review (batched range jobs included) and reports the verdict, and a skill covers judging verdicts and dispositioning findings",
+  "author": {
+    "name": "Matt Mollison",
+    "email": "matt.mollison@gmail.com"
+  }
+}
