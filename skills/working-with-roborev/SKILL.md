@@ -1,6 +1,6 @@
 ---
 name: working-with-roborev
-description: Use after pushing in a repo whose git hooks call roborev, or when handling a roborev verdict, finding, or Stop reminder: wait with roborev-wait-push, read the stored verdict, and fix or comment-then-close findings.
+description: "Use after pushing in a repo whose git hooks call roborev, or when handling a roborev verdict, finding, or Stop reminder: wait with roborev-wait-push, read the stored verdict, and fix or comment-then-close findings."
 ---
 
 # Working with roborev
