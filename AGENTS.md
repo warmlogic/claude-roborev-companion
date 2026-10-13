@@ -12,7 +12,15 @@ bash -n bin/roborev-wait-push
 shellcheck bin/roborev-wait-push
 ```
 
-All must pass before committing. To exercise the script, run it read-only against an already-pushed commit in a repo where `roborev list --all-branches` shows jobs; it only lists, waits on, and shows jobs, so it changes nothing.
+All must pass before committing.
+
+## Testing and shipping
+
+1. Run the checks.
+2. Run `claude --plugin-dir .` and load the skill.
+3. From a repo roborev reviews, run this checkout's script by its absolute path: `<this-repo>/bin/roborev-wait-push <pushed-sha>`. It only lists and waits on jobs, so it changes nothing.
+4. Open a PR; `main` is protected, and each merge is a release.
+5. If the `plugin.json` description changed, open a matching PR in warmlogic/ai-plugin-marketplace.
 
 ## Project layout
 
