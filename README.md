@@ -2,6 +2,8 @@
 
 A Claude Code companion for [roborev](https://github.com/kenn-io/roborev), the AI review daemon that reviews your commits from git hooks. roborev ships its own Claude Code hooks and skills; this plugin adds what they leave out: a script that waits on a **push's** review (batched range jobs included) and a skill that teaches Claude how to read verdicts and disposition findings.
 
+Setup, below, is done once per machine and once per repo. Day to day, Claude loads the `working-with-roborev` skill on its own, so there's nothing more to read.
+
 ## Setup
 
 1. **Install roborev and `jq`** (the script needs it): `brew install kenn-io/tap/roborev jq`, or roborev's `curl -fsSL https://roborev.io/install.sh | bash`. Check with `roborev version`.
@@ -18,17 +20,15 @@ A Claude Code companion for [roborev](https://github.com/kenn-io/roborev), the A
 6. **Tell Claude when to use it**: roborev's git hooks run silently, so add this line to your own `~/.claude/CLAUDE.md` (not a repo's shared `CLAUDE.md`, since teammates may not have roborev or this plugin):
 
    ```text
-   In a repo whose git hooks call roborev (`grep -l roborev "$(git rev-parse --git-common-dir)"/hooks/*`), after pushing, run `roborev-wait-push` and act on its verdict; load the `roborev-companion:working-with-roborev` skill first.
+   In a repo whose git hooks call roborev (`grep -l roborev "$(git rev-parse --git-path hooks)"/*`), after pushing, run `roborev-wait-push` and act on its verdict; load the `roborev-companion:working-with-roborev` skill first.
    ```
 
 7. **Verify**: the script is on Claude's Bash `PATH` only, so in a Claude Code session in the repo (after `/reload-plugins`, or in a new session), commit and push a small change without `[no-roborev]`, then ask Claude to run `roborev-wait-push`. It should end with `PASS (exit 0)` or `FAIL open (exit 1)`.
 
-After `roborev update`, rerun `roborev init` in each repo and `roborev agent-hook install`: the hooks change between versions.
-
 ## What it provides
 
 - **`bin/roborev-wait-push [ref]`**, on Claude's Bash `PATH` while the plugin is enabled. It finds the newest review job whose range ends at the ref (default `HEAD`), waits for it, and decides from the job's final state. Its exit codes are listed in [the skill](skills/working-with-roborev/SKILL.md#the-80-path). It warns about other open FAIL and unfinished jobs on the same branch.
-- **The `working-with-roborev` skill**, which Claude loads after pushing in a roborev repo or when handling a verdict, finding, or agent-hook reminder: which commits get a job, the severity gate, `failed` jobs, comment-then-close dispositions, widened ranges after a rebase, and hook-state hygiene. It uses roborev's own `/roborev-fix` when a Stop reminder asks for it, and otherwise its own steps.
+- **The `working-with-roborev` skill**, which tells Claude how to wait on a push's review and act on each verdict.
 
 ## Configuration best practices
 
@@ -58,11 +58,11 @@ event = "review.*"
 command = "<script> {agent} {job_id} {repo_name}"   # a script you write: exits quietly for the primary; otherwise logs one line per job; never fails
 ```
 
-- **One explicit model and effort default, overrides by exception.** The per-push review is the frequent first line, so it runs at a moderate default; depth belongs to the pre-merge review. The daemon resolves model and reasoning from config when it enqueues, so nothing in the push can raise one push's level. For a risky push, let the automatic job run, then add one deeper pass over the range: `roborev review --since <base> --reasoning xhigh`. For a trivial push, mark every commit in it with `[no-roborev]` (the per-repo config below lists that marker).
+- **One explicit model and effort default, overrides by exception.** The per-push review is the frequent first line, so it runs at a moderate default; depth belongs to the pre-merge review. The daemon resolves model and reasoning from config when it enqueues, so nothing in the push can raise one push's level. For a risky push, let the automatic job run, then add one deeper pass over the range: `roborev review --since <base> --reasoning xhigh`.
 
 ### Per repo
 
-- **A tight root `REVIEW.md`, committed to the default branch**: what the repo values, what to flag (its domain's failure classes, each as a demonstrable defect), and what to skip (speculative edge cases, style, anything CI reports). It is the strongest false-positive filter, and the agent hook stays silent in a repo without review guidance. Claude Code's Code Review also reads it, so write it as team-wide review guidance. roborev reads it from the default branch, so a branch's edits apply only after merge; [the skill](skills/working-with-roborev/SKILL.md#repo-configuration) covers that and tuning it from review history.
+- **A tight root `REVIEW.md`, committed to the default branch**: state each finding class as a demonstrable defect, and skip anything CI reports. It is the strongest false-positive filter, and the agent hook stays silent in a repo without review guidance. Claude Code's Code Review also reads it, so write it as team-wide review guidance. roborev reads it from the default branch, so a branch's edits apply only after merge; [the skill](skills/working-with-roborev/SKILL.md#repo-configuration) covers that and tuning it from review history.
 - **A committed `.roborev.toml` with one review per push.** The recommended default for every repo:
 
   ```toml
@@ -74,7 +74,7 @@ command = "<script> {agent} {job_id} {repo_name}"   # a script you write: exits 
 
   - With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds; a branch also flushes on its own every 20 commits. A rebase or a merge from the default branch widens the next range (the skill covers handling that).
   - A failed flush never blocks the push; the reason is logged in `~/.roborev/post-commit.log`.
-  - Commit the file so every branch and worktree gets it (it's inert for teammates without roborev). If teammates shouldn't get batching, keep it untracked and listed in `.git/info/exclude`; a linked worktree with no copy reads the main checkout's file.
+  - Commit the file so every branch and worktree gets it; it's inert for anyone without roborev.
 
 - **Only if the repo sets `core.hooksPath`** (`git config --get core.hooksPath`; empty means skip this): roborev installs its hooks into that directory, which may be tracked.
   - Commit roborev's hook changes (they no-op where roborev isn't installed), or keep its hook files (`post-commit`, `post-rewrite`, `pre-push`) untracked and listed in `.git/info/exclude`.
