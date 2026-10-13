@@ -7,10 +7,11 @@
 # (cmd/roborev/daemon_client.go findJobForCommit, v0.71.0), so it reports
 # "No job found" for a range head. This finds the newest review or range job
 # whose git_ref is <sha> or ends in "..<sha>", waits on that job id, then reads
-# the job's final state: a FAIL that was dispositioned (closed, with a comment
-# giving the reason) no longer blocks, and a job that errored is not a review verdict.
+# the job's final state: a closed FAIL no longer blocks (whoever closed it:
+# `roborev close`, or `roborev compact`, which closes its sources with no
+# comment), and a job that errored is not a review verdict.
 #
-# Exit: 0 PASS, or FAIL closed with a comment; 1 FAIL open, or closed with no comment;
+# Exit: 0 PASS, or a closed FAIL; 1 FAIL open;
 #       2 no job found within the retry window; 3 usage/git/daemon error;
 #       4 the job finished without a verdict (agent error, canceled).
 #       Before that line, a warning on stderr names any OTHER open FAIL jobs on the
@@ -103,15 +104,10 @@ fi
 case "$status:$verdict:$closed" in
   done:P:*)    finish PASS 0 ;;
   done:F:true)
-    # A close counts as a disposition only with its reason on record.
-    comments=$(roborev show --job "$job_id" --json | jq '.comments | length') \
-      || die "could not read job $job_id's comments"
-    if [ "$comments" -gt 0 ]; then
-      echo "roborev-wait-push: job $job_id FAIL is closed with a comment (dispositioned); not blocking" >&2
-      finish "PASS, FAIL closed with comment" 0
-    fi
-    echo "roborev-wait-push: job $job_id FAIL was closed with no comment; add the reason (roborev comment --job $job_id -m ...)" >&2
-    finish "FAIL closed without comment" 1 ;;
+    # roborev compact closes the jobs it consolidates without a comment, so a
+    # missing comment can't block; it only earns a nudge.
+    echo "roborev-wait-push: job $job_id FAIL is closed; not blocking. If you closed it, prefer comment-then-close so later reviews learn (roborev comment --job $job_id -m ...)" >&2
+    finish "PASS, FAIL closed" 0 ;;
   done:F:*)
     echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2
     finish "FAIL open" 1 ;;
