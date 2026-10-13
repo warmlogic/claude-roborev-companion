@@ -5,7 +5,7 @@ A Claude Code companion for [roborev](https://github.com/kenn-io/roborev), the A
 ## Setup
 
 1. **Install roborev**: `brew install kenn-io/tap/roborev`, or `curl -fsSL https://roborev.io/install.sh | bash`. Check with `roborev version`.
-2. **Install roborev's skills and hooks for Claude Code**: `roborev skills install`, then `roborev agent-hook install` (it writes its Stop and PostToolUse hooks into Claude Code's settings; check with `roborev agent-hook status`). This plugin has no hooks of its own and doesn't duplicate those.
+2. **Install roborev's skills and hooks for Claude Code**: `roborev skills install`, then `roborev agent-hook install` (it writes its hooks into Claude Code's settings; check with `roborev agent-hook status`). This plugin has no hooks of its own and doesn't duplicate those.
 3. **Install this plugin** in Claude Code:
 
    ```text
