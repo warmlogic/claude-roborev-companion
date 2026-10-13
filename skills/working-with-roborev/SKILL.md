@@ -1,6 +1,6 @@
 ---
 name: working-with-roborev
-description: Use after committing or pushing in a repo that roborev reviews (its git hooks call roborev, or it has a .roborev.toml or REVIEW.md), when running roborev-wait-push or judging a roborev review verdict, or when handling roborev findings or a roborev agent-hook Stop reminder. Covers waiting on a push's review with roborev-wait-push and its exit codes, the severity gate, and dispositioning findings (fix, compact, comment then close).
+description: Use after pushing in a repo whose git hooks call roborev, or when handling a roborev verdict, finding, or Stop reminder: wait with roborev-wait-push, read the stored verdict, and fix or comment-then-close findings.
 ---
 
 # Working with roborev
