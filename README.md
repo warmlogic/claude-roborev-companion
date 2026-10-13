@@ -50,9 +50,15 @@ failed_review_threshold = 1          # one open Fail surfaces at the next Stop
 ### Per repo
 
 - **A tight root `REVIEW.md`, committed to the default branch**: what the repo values, what to flag (its domain's failure classes, each as a demonstrable defect), and what to skip (speculative edge cases, style, anything CI reports). It is the strongest false-positive filter, and the agent hook stays silent in a repo without review guidance. roborev reads it from the default branch, so a branch's edits apply only after merge; [the skill](skills/working-with-roborev/SKILL.md#repo-configuration) covers that and tuning it from review history.
-- **`exclude_patterns`** in `.roborev.toml` for generated and lock files that have their own drift tests.
-- **Per-push batching**, recommended for agent-heavy repos: `post_commit_batch_size = 20`. The post-commit hook then only records pending commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds; a branch also flushes on its own every 20 commits. A failed flush never blocks the push; the reason is in `~/.roborev/post-commit.log`. Trade-off: a rebase or a merge from the default branch widens the next range (the skill covers handling that).
-- **A machine-local `.roborev.toml`**: keep it untracked and listed in `.git/info/exclude`. A linked worktree with no copy reads the main checkout's file, but only while it is untracked; a tracked `.roborev.toml` is branch-specific and never inherited. That is what makes batching apply in agent worktrees.
+- **A committed `.roborev.toml` with one review per push.** The recommended default for every repo:
+
+  ```toml
+  # .roborev.toml
+  post_commit_batch_size = 20   # one review per push, not per commit
+  exclude_patterns = []         # generated and lock files that have their own drift tests, e.g. "uv.lock"
+  ```
+
+  With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds, so each push gets one verdict; a branch also flushes on its own every 20 commits. A failed flush never blocks the push; the reason is in `~/.roborev/post-commit.log`. Trade-off: a rebase or a merge from the default branch widens the next range (the skill covers handling that). Committing the file gives every branch and worktree the same settings. If teammates shouldn't get batching, keep the file untracked instead and list it in `.git/info/exclude`: a linked worktree with no copy of its own then reads the main checkout's file.
 - **An absolute `core.hooksPath`.** If the repo commits its hooks directory (`core.hooksPath` pointing at a tracked `.githooks/`), roborev installs into it and edits tracked files: either commit its changes (they no-op where roborev isn't installed) or keep its hook files (`post-commit`, `post-rewrite`, `pre-push`) untracked and listed in `.git/info/exclude`. Keep `core.hooksPath` absolute, pointing at the main checkout's hooks directory, so linked worktrees share the roborev hooks.
 
 ## Development
