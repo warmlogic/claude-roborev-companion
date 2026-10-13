@@ -16,11 +16,11 @@
 #       3 usage/git/daemon error, or the job was still unfinished after the wait (rerun);
 #       4 the job finished without a verdict (agent error, canceled);
 #       128+N killed by signal N (INTERRUPTED: rerun; not a daemon error).
+#       The last line of output, on every path, names the result and the exit code
+#       ("roborev-wait-push: PASS (exit 0)"), so `| tail -1` always shows it (stdout, after everything else).
 #       Before that line, warnings on stderr name any OTHER open FAIL jobs and any
 #       other queued or running jobs on the same branch (among the newest 200 jobs);
 #       they don't change the exit code.
-#       The last line of output, on every path, names the result and the exit code
-#       ("roborev-wait-push: PASS (exit 0)"), so `| tail -1` always shows it (stdout, after everything else).
 # Env:  ROBOREV_WAIT_PUSH_TIMEOUT  seconds to keep looking for the job (default 60)
 set -euo pipefail
 
