@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# roborev-wait-push [ref]  - wait for the roborev review whose range ends at ref
+# (default HEAD) in the current repo, and report whether it still blocks.
+#
+# Why: with post_commit_batch_size >= 2, the pre-push hook enqueues one range job
+# (git_ref "<checkpoint>..<head>"). `roborev wait <sha>` matches git_ref exactly
+# (cmd/roborev/daemon_client.go findJobForCommit, v0.71.0), so it reports
+# "No job found" for a range head. This finds the newest review or range job
+# whose git_ref is <sha> or ends in "..<sha>", waits on that job id, then reads
+# the job's final state: a FAIL that was dispositioned (closed, with a comment
+# giving the reason) no longer blocks, and a job that errored is not a review verdict.
+#
+# Exit: 0 PASS, or FAIL closed with a comment; 1 FAIL open, or closed with no comment;
+#       2 no job found within the retry window; 3 usage/git/daemon error;
+#       4 the job finished without a verdict (agent error, canceled).
+# Env:  ROBOREV_WAIT_PUSH_TIMEOUT  seconds to keep looking for the job (default 60)
+set -euo pipefail
+
+timeout="${ROBOREV_WAIT_PUSH_TIMEOUT:-60}"
+interval=3
+ref="${1:-HEAD}"
+
+die() { echo "roborev-wait-push: $1" >&2; exit "${2:-3}"; }
+
+[ $# -le 1 ] || die "usage: roborev-wait-push [ref]"
+command -v roborev >/dev/null || die "roborev not on PATH"
+command -v jq >/dev/null || die "jq not on PATH"
+
+sha=$(git rev-parse --verify --quiet "${ref}^{commit}") || die "not a commit in this repo: $ref"
+common=$(git rev-parse --path-format=absolute --git-common-dir) || die "not a git repo"
+main_root=$(dirname "$common")  # jobs are stored under the main checkout, even from a linked worktree
+
+list_jobs() {
+  roborev list --repo "$main_root" --all-branches --json --limit 200 \
+    || die "roborev list failed (daemon down?)"
+}
+
+deadline=$(( $(date +%s) + timeout ))
+while :; do
+  job_id=$(list_jobs | jq -r --arg sha "$sha" '
+    [ .[]
+      | select(.job_type == "review" or .job_type == "range")
+      | select(.git_ref == $sha or (.git_ref | endswith(".." + $sha))) ]
+    | max_by(.id) // empty | .id') \
+    || die "could not parse roborev list output"
+  [ -n "$job_id" ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    die "no review job ends at ${sha:0:7} after ${timeout}s. Was it pushed? See ~/.roborev/post-commit.log" 2
+  fi
+  sleep "$interval"
+done
+
+echo "roborev-wait-push: ${sha:0:7} -> job $job_id" >&2
+# Prints the review; its exit code is not the answer (it is 1 for a closed FAIL
+# and for a job error alike), so the job's final state decides below.
+roborev wait --job "$job_id" || true
+
+state=$(list_jobs | jq -r --argjson id "$job_id" '
+  .[] | select(.id == $id) | "\(.status) \(.verdict // "-") \(.closed // false)"') \
+  || die "could not parse roborev list output"
+[ -n "$state" ] || die "job $job_id is no longer listed"
+read -r status verdict closed <<<"$state"
+
+case "$status:$verdict:$closed" in
+  done:P:*)    exit 0 ;;
+  done:F:true)
+    # A close counts as a disposition only with its reason on record.
+    comments=$(roborev show --job "$job_id" --json | jq '.comments | length') \
+      || die "could not read job $job_id's comments"
+    if [ "$comments" -gt 0 ]; then
+      echo "roborev-wait-push: job $job_id FAIL is closed with a comment (dispositioned); not blocking" >&2; exit 0
+    fi
+    echo "roborev-wait-push: job $job_id FAIL was closed with no comment; add the reason (roborev comment --job $job_id -m ...)" >&2; exit 1 ;;
+  done:F:*)    echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2; exit 1 ;;
+  *)           echo "roborev-wait-push: job $job_id ended '$status' with no verdict; not a review result" >&2; exit 4 ;;
+esac
