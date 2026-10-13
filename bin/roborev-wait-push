@@ -50,21 +50,28 @@ command -v roborev >/dev/null || die "roborev not on PATH"
 command -v jq >/dev/null || die "jq not on PATH"
 
 sha=$(git rev-parse --verify --quiet "${ref}^{commit}") || die "not a commit in this repo: $ref"
-common=$(git rev-parse --path-format=absolute --git-common-dir) || die "not a git repo"
-main_root=$(dirname "$common")  # jobs are stored under the main checkout, even from a linked worktree
+# roborev list resolves the repo from the working directory: right from a linked
+# worktree's root or subdirectory, but empty from a main checkout's subdirectory
+# (roborev v0.71.0), so list from the worktree root.
+cd "$(git rev-parse --show-toplevel)" || die "could not find the worktree root"
 
+# Sets $jobs in this shell (not a subshell), so a failure reports once and exits.
 list_jobs() {
-  roborev list --repo "$main_root" --all-branches --json --limit 200 \
+  jobs=$(roborev list --all-branches --json --limit 200) \
     || die "roborev list failed (daemon down?)"
 }
 
 deadline=$(( $(date +%s) + timeout ))
 while :; do
-  job_id=$(list_jobs | jq -r --arg sha "$sha" '
+  list_jobs
+  n_jobs=$(jq 'length' <<<"$jobs") || die "could not parse roborev list output"
+  # A repo with no jobs at all isn't hooked up; waiting won't change that.
+  [ "$n_jobs" -gt 0 ] || die "roborev has no jobs for this repo; run roborev init here?" 2
+  job_id=$(jq -r --arg sha "$sha" '
     [ .[]
       | select(.job_type == "review" or .job_type == "range")
       | select(.git_ref == $sha or (.git_ref | endswith(".." + $sha))) ]
-    | max_by(.id) // empty | .id') \
+    | max_by(.id) // empty | .id' <<<"$jobs") \
     || die "could not parse roborev list output"
   [ -n "$job_id" ] && break
   if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -78,7 +85,7 @@ echo "roborev-wait-push: ${sha:0:7} -> job $job_id" >&2
 # and for a job error alike), so the job's final state decides below.
 roborev wait --job "$job_id" || true
 
-jobs=$(list_jobs)
+list_jobs
 state=$(jq -r --argjson id "$job_id" '
   .[] | select(.id == $id) | "\(.status) \(.verdict // "-") \(.closed // false)"' <<<"$jobs") \
   || die "could not parse roborev list output"
