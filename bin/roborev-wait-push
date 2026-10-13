@@ -13,6 +13,8 @@
 # Exit: 0 PASS, or FAIL closed with a comment; 1 FAIL open, or closed with no comment;
 #       2 no job found within the retry window; 3 usage/git/daemon error;
 #       4 the job finished without a verdict (agent error, canceled).
+#       Before that line, a warning on stderr names any OTHER open FAIL jobs on the
+#       same branch (among the newest 200 jobs); they don't change the exit code.
 #       The last line of output, on every path, names the result and the exit code
 #       ("roborev-wait-push: PASS (exit 0)"), so `| tail -1` always shows it (stdout, after everything else).
 # Env:  ROBOREV_WAIT_PUSH_TIMEOUT  seconds to keep looking for the job (default 60)
@@ -75,11 +77,28 @@ echo "roborev-wait-push: ${sha:0:7} -> job $job_id" >&2
 # and for a job error alike), so the job's final state decides below.
 roborev wait --job "$job_id" || true
 
-state=$(list_jobs | jq -r --argjson id "$job_id" '
-  .[] | select(.id == $id) | "\(.status) \(.verdict // "-") \(.closed // false)"') \
+jobs=$(list_jobs)
+state=$(jq -r --argjson id "$job_id" '
+  .[] | select(.id == $id) | "\(.status) \(.verdict // "-") \(.closed // false)"' <<<"$jobs") \
   || die "could not parse roborev list output"
 [ -n "$state" ] || die "job $job_id is no longer listed"
 read -r status verdict closed <<<"$state"
+
+# This job's verdict can be clean while earlier pushes on the branch still carry
+# open FAILs; name them so they aren't missed. Same listing, no second request.
+if others=$(jq -r --argjson id "$job_id" '
+    (.[] | select(.id == $id) | .branch // "") as $branch
+    | [ .[] | select($branch != "" and .branch == $branch and .id != $id
+                     and .status == "done" and .verdict == "F" and ((.closed // false) | not))
+            | .id ]
+    | if length > 0 then "\(length) \($branch) \(map(tostring) | join(" "))" else empty end' <<<"$jobs"); then
+  if [ -n "$others" ]; then
+    read -r n_other other_branch other_ids <<<"$others"
+    echo "roborev-wait-push: warning: branch $other_branch has $n_other other open FAIL job(s): $other_ids (roborev list --all-branches --open)" >&2
+  fi
+else
+  echo "roborev-wait-push: warning: could not check the branch for other open FAIL jobs" >&2
+fi
 
 case "$status:$verdict:$closed" in
   done:P:*)    finish PASS 0 ;;
