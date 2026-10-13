@@ -5,11 +5,13 @@ description: "Use after pushing in a repo whose git hooks call roborev, or when 
 
 # Working with roborev
 
-[roborev](https://github.com/kenn-io/roborev) reviews commits in the background: its git hooks enqueue jobs with a local daemon, and an AI agent writes a review with a stored verdict, `P` (pass) or `F` (fail). A repo uses it when its hooks call roborev: `grep -l roborev "$(git rev-parse --git-common-dir)"/hooks/*` (or the `core.hooksPath` directory). `roborev version` names the installed version; the source citations below are paths in the roborev repo at v0.71.0.
+[roborev](https://github.com/kenn-io/roborev) reviews commits in the background: its git hooks enqueue jobs with a local daemon, and an AI agent writes a review with a stored verdict, `P` (pass) or `F` (fail). A repo uses it when its hooks call roborev: `grep -l roborev "$(git rev-parse --git-path hooks)"/*`.
+
+Setting up roborev on a machine or a repo isn't this skill's job: see `${CLAUDE_PLUGIN_ROOT}/README.md`.
 
 ## The 80% path
 
-1. Commit, push, then run `roborev-wait-push` (optional ref, default `HEAD`) from the repo, any subdirectory, or any of its worktrees. It finds the review job that ends at that commit, waits for it, and prints the review. Run it unpiped: the last line, `roborev-wait-push: <result> (exit N)`, is the result, and the review text above it holds the findings (`roborev show --job <id>` re-reads them). A review usually takes one to two minutes after the push, which can outlast the Bash tool's default 2-minute timeout: run it with a long timeout (`timeout: 600000`) or in the background.
+1. Commit, push, then run `roborev-wait-push` (optional ref, default `HEAD`; skip it when every commit in the push carries `[no-roborev]`, since there is no job to wait for) from the repo, any subdirectory, or any of its worktrees. It finds the review job that ends at that commit, waits for it, and prints the review. Run it unpiped: the last line, `roborev-wait-push: <result> (exit N)`, is the result, and the review text above it holds the findings (`roborev show --job <id>` re-reads them). A review usually takes one to two minutes after the push, which can outlast the Bash tool's default 2-minute timeout: run it with a long timeout (`timeout: 600000`) or in the background.
 2. Act on the exit code:
 
    | Exit  | Meaning                                                                  | Do                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -28,19 +30,20 @@ description: "Use after pushing in a repo whose git hooks call roborev, or when 
 
 ## Which commits get a job
 
-- **Batched repo** (`post_commit_batch_size` of 2 or more in `.roborev.toml`): commits get no job of their own. The pre-push hook enqueues one **range** job, `<last reviewed>..<pushed head>` (a branch also flushes on its own every N commits). `roborev wait <sha>` reports "No job found" and `roborev show <sha>` "no review found" for a range head, since they match `git_ref` exactly against one SHA (`cmd/roborev/daemon_client.go` `findJobForCommit`); `roborev-wait-push` matches the range end.
+- **Batched repo** (`post_commit_batch_size` of 2 or more in `.roborev.toml`): commits get no job of their own. The pre-push hook enqueues one **range** job, `<last reviewed>..<pushed head>` (a branch also flushes on its own every N commits). `roborev wait <sha>` reports "No job found" and `roborev show <sha>` "no review found" for a range head, since they match `git_ref` exactly against one SHA; `roborev-wait-push` matches the range end.
 - **Unbatched repo:** every commit gets a job. `roborev wait <sha>` works, and so does `roborev-wait-push <sha>`.
 - **A push from a detached HEAD enqueues nothing**, because the pre-push flush keys on the branch. After `git push origin <sha>:refs/heads/<branch>`, queue the range yourself with `roborev review --since <base> --wait` and read that job's verdict.
 - `roborev list` shows only the current branch; use `roborev list --all-branches` (add `--open` for unresolved jobs), or worktree commits look unreviewed.
 
 ## Reading a verdict
 
-- **Judge the stored verdict, not the review's `Agent assessment:` line.** roborev re-derives the verdict from `review_min_severity` (`internal/review/runner.go`), so with a `medium` gate a review with only Low findings prints `Agent assessment: Fail` but is stored `P`. The stored verdict is the `Verdict` column of `roborev list`, `.job.verdict` in `roborev show --json`, or the script's exit code. Low findings don't block or trigger the hook, but read them.
-- **A clean verdict is not a clean merge.** roborev is the per-push first line: it catches local bugs within about a minute and misses design-level problems across commits. Pre-merge review and the PR's own review threads gate the merge separately.
+- **Judge the stored verdict, not the review's `Agent assessment:` line.** roborev re-derives the verdict from `review_min_severity`, so with a `medium` gate a review with only Low findings prints `Agent assessment: Fail` but is stored `P`. The stored verdict is the `Verdict` column of `roborev list`, `.job.verdict` in `roborev show --json`, or the script's exit code. Low findings don't block or trigger the hook, but read them.
+- Don't report a roborev PASS as merge-ready; pre-merge review and PR threads gate the merge.
 - **A `failed` status is not a failed review.** It is an agent error (quota, empty diff): no verdict, nothing to close. `roborev wait` exits 1 on it too, which is why the script decides from the job's state instead.
 
 ## Handling findings
 
+- Don't invoke `/roborev-fix` unless a Stop reminder or the user asks.
 - **Real defect:** fix it, commit, push, and wait again; then `roborev comment --job <old> -m "fixed in <sha>"` and `roborev close <old>`. Use `roborev compact --wait --branch <branch>` only when several open jobs overlap: it re-checks their findings against the current code, closes the fixed ones, and opens one consolidated job for what remains (an agent run; don't run two on one branch at once).
 - **False positive, or not worth fixing:** `roborev comment --job <id> -m "<evidence>"`, **then** `roborev close <id>`. Comments feed later reviews; a bare close teaches nothing. Both take one id each.
 - **Judge findings by who hits them.** A finding that needs an input no ordinary user produces (a crafted environment value, a NUL byte) is a limit: comment with that reason and close. A fix adds a guard nobody needs, and the next review probes the guard. Trust boundaries (untrusted input, auth, secrets) and anything that can lose data are the exceptions, judged on impact.
@@ -66,5 +69,5 @@ If `roborev agent-hook install` is set up, a Stop reminder names open FAIL job i
 
 ## Repo configuration
 
-- **`REVIEW.md` and the `.roborev.toml` keys that shape the review prompt are read from the default branch**, so a branch's edits to them apply after merge. The hook-side keys (`post_commit_batch_size`, `excluded_commit_patterns`) are read from the checkout and apply at once (`internal/config/config.go`: the prompt uses `LoadRepoConfigFromRef`, the hooks `LoadRepoConfig`).
+- **`REVIEW.md` and the `.roborev.toml` keys that shape the review prompt are read from the default branch**, so a branch's edits to them apply after merge. The keys that decide whether a job is enqueued (`post_commit_batch_size`, `excluded_commit_patterns`, `excluded_branches`) are read from the checkout and apply at once.
 - **Tune from history:** `roborev insights --since 30d` (slow; run it in the background), then fold recurring false positives into `REVIEW.md`, or into a file's header when they concern that file's design. Its counts include reviews of code since deleted, so check that a pattern still exists before acting on it.
