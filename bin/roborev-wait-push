@@ -12,8 +12,10 @@
 # comment), and a job that errored is not a review verdict.
 #
 # Exit: 0 PASS, or a closed FAIL; 1 FAIL open;
-#       2 no job found within the retry window; 3 usage/git/daemon error;
-#       4 the job finished without a verdict (agent error, canceled).
+#       2 no job found within the retry window, or the repo has no roborev jobs at all;
+#       3 usage/git/daemon error, or the job was still unfinished after the wait (rerun);
+#       4 the job finished without a verdict (agent error, canceled);
+#       128+N killed by signal N (INTERRUPTED: rerun; not a daemon error).
 #       Before that line, warnings on stderr name any OTHER open FAIL jobs and any
 #       other queued or running jobs on the same branch (among the newest 200 jobs);
 #       they don't change the exit code.
@@ -27,18 +29,34 @@ interval=3
 ref="${1:-HEAD}"
 
 # Every exit goes through the EXIT trap, which prints the one final line. finish
-# sets its label; an exit that didn't come through finish (a `set -e` failure)
-# is reported as ERROR with exit 3, keeping the exit-code contract.
+# sets its label. A signal keeps its 128+N code as INTERRUPTED; any other exit
+# that didn't come through finish (a `set -e` failure) is reported as ERROR
+# with exit 3, keeping the exit-code contract.
 result=""
 # shellcheck disable=SC2329  # invoked by the EXIT trap
 on_exit() {
   local rc=$?
-  if [ -z "$result" ]; then result=ERROR; rc=3; fi
+  if [ -z "$result" ]; then
+    if [ "$rc" -gt 128 ]; then result=INTERRUPTED; else result=ERROR; rc=3; fi
+  fi
   echo "roborev-wait-push: $result (exit $rc)"
   exit "$rc"
 }
 trap on_exit EXIT
 finish() { result=$1; exit "$2"; }
+
+# A fatal signal doesn't reach on_exit with a 128+N status, so trap the common
+# ones. `roborev wait` runs in the background so the trap fires at once rather
+# than after it returns; the trap stops it.
+wait_pid=""
+# shellcheck disable=SC2329  # invoked by the signal traps
+on_signal() {
+  if [ -n "$wait_pid" ]; then kill "$wait_pid" 2>/dev/null || true; fi
+  result=INTERRUPTED; exit "$1"
+}
+trap 'on_signal 129' HUP
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 die() {
   local code="${2:-3}"
@@ -84,7 +102,10 @@ done
 echo "roborev-wait-push: ${sha:0:7} -> job $job_id" >&2
 # Prints the review; its exit code is not the answer (it is 1 for a closed FAIL
 # and for a job error alike), so the job's final state decides below.
-roborev wait --job "$job_id" || true
+roborev wait --job "$job_id" &
+wait_pid=$!
+wait "$wait_pid" || true
+wait_pid=""
 
 list_jobs
 state=$(jq -r --argjson id "$job_id" '
@@ -122,7 +143,11 @@ case "$status:$verdict:$closed" in
   done:F:*)
     echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2
     finish "FAIL open" 1 ;;
+  queued:*|running:*)
+    die "job $job_id is still $status after roborev wait returned; rerun" ;;
   *)
-    echo "roborev-wait-push: job $job_id ended '$status' with no verdict; not a review result" >&2
+    error=$(jq -r --argjson id "$job_id" '.[] | select(.id == $id) | .error // "(no error recorded)"' <<<"$jobs") \
+      || error="(could not read the job's error)"
+    echo "roborev-wait-push: job $job_id ended '$status' with no verdict; not a review result. Error: $error" >&2
     finish "NO VERDICT, status $status" 4 ;;
 esac
