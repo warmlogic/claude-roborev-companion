@@ -39,13 +39,15 @@ review_context_count = 3             # prior reviews and their comments feed the
 review_min_severity = 'medium'       # the stored verdict is Fail only for a medium-or-higher finding
 fix_min_severity = 'medium'          # fix passes act on the same band
 auto_close_passing_reviews = true    # the open list holds only work
+default_backup_agent = 'claude'      # keeps reviews flowing when the primary's quota runs out
+default_backup_model = 'sonnet'
+agent_quota_cooldown = '30m0s'       # how long to stay on the backup before retrying the primary
 
 [agent_hook]
-failed_review_threshold = 1          # one open Fail surfaces at the next Stop
+failed_review_threshold = 1          # one open Fail surfaces at the next Stop (default 4)
 ```
 
-- **One explicit model and effort default, overrides by exception.** The per-push review is the frequent first line, so it runs at a moderate default; depth belongs to the pre-merge review. The daemon resolves model and reasoning from config when it enqueues, so nothing in the push can raise one push's level. For a risky push, let the automatic job run, then add one deeper pass over the range: `roborev review --since <base> --reasoning xhigh`. For a trivial push, put a marker such as `[no-roborev]` in the commit message and list it in `.roborev.toml` as `excluded_commit_patterns = ['[no-roborev]']`; a range is skipped only when every commit in it carries the marker.
-- `roborev config set --global default_backup_agent <agent>` keeps reviews flowing when the primary agent's quota runs out.
+- **One explicit model and effort default, overrides by exception.** The per-push review is the frequent first line, so it runs at a moderate default; depth belongs to the pre-merge review. The daemon resolves model and reasoning from config when it enqueues, so nothing in the push can raise one push's level. For a risky push, let the automatic job run, then add one deeper pass over the range: `roborev review --since <base> --reasoning xhigh`. For a trivial push, mark every commit in it with `[no-roborev]` (the per-repo config below lists that marker).
 
 ### Per repo
 
@@ -54,8 +56,9 @@ failed_review_threshold = 1          # one open Fail surfaces at the next Stop
 
   ```toml
   # .roborev.toml
-  post_commit_batch_size = 20   # one review per push, not per commit
-  exclude_patterns = []         # generated and lock files that have their own drift tests, e.g. "uv.lock"
+  post_commit_batch_size = 20                 # one review per push, not per commit
+  excluded_commit_patterns = ['[no-roborev]'] # a push whose every commit carries the marker isn't reviewed
+  exclude_patterns = []                       # generated and lock files that have their own drift tests, e.g. "uv.lock"
   ```
 
   With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds, so each push gets one verdict; a branch also flushes on its own every 20 commits. A failed flush never blocks the push; the reason is in `~/.roborev/post-commit.log`. Trade-off: a rebase or a merge from the default branch widens the next range (the skill covers handling that). Committing the file gives every branch and worktree the same settings, and it's inert for teammates without roborev. If teammates shouldn't get batching, keep the file untracked instead and list it in `.git/info/exclude`: a linked worktree with no copy of its own then reads the main checkout's file.
