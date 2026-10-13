@@ -23,8 +23,8 @@ skills/working-with-roborev/SKILL.md
 
 ## Non-obvious design decisions
 
-- **The script's exit codes are a contract** (0 pass, 1 blocking FAIL, 2 no job, 3 error, 4 no verdict), documented in its header and relied on by the skill. Change them only together, and keep the one final `roborev-wait-push: <result> (exit N)` line on every path, which an `EXIT` trap prints.
-- **One listing per decision.** The script reads the job's final state and the branch's other open FAILs from the same `roborev list --all-branches --json` call, so the daemon is asked once after the wait.
+- **The script's exit codes are a contract**, documented in its header and in the skill's exit-code table, which Claude acts on. Change them only together, and keep the one final `roborev-wait-push: <result> (exit N)` line on every path, which an `EXIT` trap prints.
+- **One listing per decision.** The script reads the job's final state and the branch's other open FAIL and unfinished jobs from the same `roborev list --all-branches --json` call, so the daemon is asked once after the wait.
 - **roborev source citations** in the script and skill name a file and function at the roborev version they were checked against (`roborev version`); recheck them after an upgrade.
 
 ## Unversioned
