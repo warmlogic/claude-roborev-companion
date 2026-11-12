@@ -31,7 +31,7 @@ Setting up roborev on a machine or a repo isn't this skill's job: see `${CLAUDE_
 ## Which commits get a job
 
 - **Batched repo** (`post_commit_batch_size` of 2 or more in `.roborev.toml`): commits get no job of their own. The pre-push hook enqueues one **range** job, `<last reviewed>..<pushed head>` (a branch also flushes on its own every N commits). `roborev wait <sha>` reports "No job found" and `roborev job show <sha>` "no review found" for a range head, since they match `git_ref` exactly against one SHA; `roborev-wait-push` matches the range end.
-- **A branch push in a batched repo can also queue a range job on the default branch** (what merged there since its last review), a duplicate of already-reviewed PR work that no PR owns. `excluded_branches = ["<default branch>"]` skips it; see the README.
+- **A push also flushes other local branches with unreviewed commits**, so a branch that only receives reviewed PR merges (the default branch, an integration branch) gets a duplicate review that nothing owns. List such branches in `excluded_branches`; see the README.
 - **Unbatched repo:** every commit gets a job. `roborev wait <sha>` works, and so does `roborev-wait-push <sha>`.
 - **A push from a detached HEAD enqueues nothing**, because the pre-push flush keys on the branch. After `git push origin <sha>:refs/heads/<branch>`, queue the range yourself with `roborev review --since <base> --wait` and read that job's verdict.
 - `roborev job list` shows only the current branch; use `roborev job list --all-branches` (add `--open` for unresolved jobs), or worktree commits look unreviewed.
