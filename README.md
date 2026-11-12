@@ -69,10 +69,12 @@ command = "<script> {agent} {job_id} {repo_name}"   # a script you write: exits 
   # .roborev.toml
   post_commit_batch_size = 20                 # one review per push, not per commit
   excluded_commit_patterns = ['[no-roborev]'] # a push whose every commit carries the marker isn't reviewed
+  excluded_branches = ["main"]                # your default branch's exact name: skips reviews of already-reviewed merges
   exclude_patterns = []                       # generated and lock files that have their own drift tests, e.g. "uv.lock"
   ```
 
   - With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds; a branch also flushes on its own every 20 commits. A rebase or a merge from the default branch widens the next range (the skill covers handling that).
+  - A branch's first push also queues a range job on the default branch, covering whatever merged there since its last review. Those commits were reviewed on their PR branches, and a failure there has no PR or session to own the fix, so `excluded_branches` skips it. It takes exact names (a repo whose default is `development` lists that). The trade-off: a change pushed straight to the default branch gets no automatic review.
   - A failed flush never blocks the push; the reason is logged in `~/.roborev/post-commit.log`.
   - Commit the file so every branch and worktree gets it; it's inert for anyone without roborev.
 
