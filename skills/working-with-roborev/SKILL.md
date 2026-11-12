@@ -11,7 +11,7 @@ Setting up roborev on a machine or a repo isn't this skill's job: see `${CLAUDE_
 
 ## The 80% path
 
-1. Commit, push, then run `roborev-wait-push` (optional ref, default `HEAD`; skip it when every commit in the push carries `[no-roborev]`, since there is no job to wait for) from the repo, any subdirectory, or any of its worktrees. It finds the review job that ends at that commit, waits for it, and prints the review. Run it unpiped: the last line, `roborev-wait-push: <result> (exit N)`, is the result, and the review text above it holds the findings (`roborev show --job <id>` re-reads them). A review usually takes one to two minutes after the push, which can outlast the Bash tool's default 2-minute timeout: run it with a long timeout (`timeout: 600000`) or in the background.
+1. Commit, push, then run `roborev-wait-push` (optional ref, default `HEAD`; skip it when every commit in the push carries `[no-roborev]`, since there is no job to wait for) from the repo, any subdirectory, or any of its worktrees. It finds the review job that ends at that commit, waits for it, and prints the review. Run it unpiped: the last line, `roborev-wait-push: <result> (exit N)`, is the result, and the review text above it holds the findings (`roborev job show --job <id>` re-reads them). A review usually takes one to two minutes after the push, which can outlast the Bash tool's default 2-minute timeout: run it with a long timeout (`timeout: 600000`) or in the background.
 2. Act on the exit code:
 
    | Exit  | Meaning                                                                  | Do                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -30,15 +30,16 @@ Setting up roborev on a machine or a repo isn't this skill's job: see `${CLAUDE_
 
 ## Which commits get a job
 
-- **Batched repo** (`post_commit_batch_size` of 2 or more in `.roborev.toml`): commits get no job of their own. The pre-push hook enqueues one **range** job, `<last reviewed>..<pushed head>` (a branch also flushes on its own every N commits). `roborev wait <sha>` reports "No job found" and `roborev show <sha>` "no review found" for a range head, since they match `git_ref` exactly against one SHA; `roborev-wait-push` matches the range end.
+- **Batched repo** (`post_commit_batch_size` of 2 or more in `.roborev.toml`): commits get no job of their own. The pre-push hook enqueues one **range** job, `<last reviewed>..<pushed head>` (a branch also flushes on its own every N commits). `roborev wait <sha>` reports "No job found" and `roborev job show <sha>` "no review found" for a range head, since they match `git_ref` exactly against one SHA; `roborev-wait-push` matches the range end.
+- **A push also flushes other local branches with unreviewed commits**, so a branch that only receives reviewed PR merges (the default branch, an integration branch) gets a duplicate review that nothing owns. List such branches in `excluded_branches`; see the README. When you work in a batched repo whose `.roborev.toml` doesn't list its default branch (`git symbolic-ref --short refs/remotes/origin/HEAD` without its `origin/` prefix; `excluded_branches` takes the bare name) there, tell the user once and offer the one-line change; the file is committed, so it ships through the repo's usual PR.
 - **Unbatched repo:** every commit gets a job. `roborev wait <sha>` works, and so does `roborev-wait-push <sha>`.
 - **A push from a detached HEAD enqueues nothing**, because the pre-push flush keys on the branch. After `git push origin <sha>:refs/heads/<branch>`, queue the range yourself with `roborev review --since <base> --wait` and read that job's verdict.
-- `roborev list` shows only the current branch; use `roborev list --all-branches` (add `--open` for unresolved jobs), or worktree commits look unreviewed.
+- `roborev job list` shows only the current branch; use `roborev job list --all-branches` (add `--open` for unresolved jobs), or worktree commits look unreviewed.
 
 ## Reading a verdict
 
-- **Judge the stored verdict, not the review's `Agent assessment:` line.** roborev re-derives the verdict from `review_min_severity`, so with a `medium` gate a review with only Low findings prints `Agent assessment: Fail` but is stored `P`. The stored verdict is the `Verdict` column of `roborev list`, `.job.verdict` in `roborev show --json`, or the script's exit code. Low findings don't block or trigger the hook, but read them.
-- Don't report a roborev PASS as merge-ready; pre-merge review and PR threads gate the merge.
+- **Judge the stored verdict, not the review's `Agent assessment:` line.** roborev re-derives the verdict from `review_min_severity`, so with a `medium` gate a review with only Low findings prints `Agent assessment: Fail` but is stored `P`. The stored verdict is the `Verdict` column of `roborev job list`, `.job.verdict` in `roborev job show --json`, or the script's exit code. Low findings don't block or trigger the hook, but read them.
+- Don't report a roborev PASS as merge-ready; pre-merge review and PR threads gate the merge. roborev can't block a GitHub merge (verdicts are local), so the gate is yours: before merging a PR (only on the user's instruction), run `roborev job list --branch <its head branch> --open`. An open FAIL there is a stop: fix it, or `comment` then `close` it, or tell the user. Never merge past one.
 - **A `failed` status is not a failed review.** It is an agent error (quota, empty diff): no verdict, nothing to close. `roborev wait` exits 1 on it too, which is why the script decides from the job's state instead.
 
 ## Handling findings
@@ -58,7 +59,7 @@ Setting up roborev on a machine or a repo isn't this skill's job: see `${CLAUDE_
 
 If `roborev agent-hook install` is set up, a Stop reminder names open FAIL job ids and an exact `roborev agent-hook fix-done <session>` command. Run `/roborev-fix <ids>` (roborev's own skill), then that exact command, and only once each job is fixed or commented and closed.
 
-- **The hook counts open FAILs by repo and branch**, not by session or worktree, so a reminder can name jobs from another agent's commits on the same branch. Send those to the agent that made the commits, which has the context and the worktree. A session that coordinates other agents can start with `ROBOREV_AGENT_HOOK_FAILED_REVIEW_THRESHOLD=0` and read verdicts with `roborev list --all-branches --open`; `roborev snooze on -d 2h` mutes one worktree and branch for a while.
+- **The hook counts open FAILs by repo and branch**, not by session or worktree, so a reminder can name jobs from another agent's commits on the same branch. Send those to the agent that made the commits, which has the context and the worktree. A session that coordinates other agents can start with `ROBOREV_AGENT_HOOK_FAILED_REVIEW_THRESHOLD=0` and read verdicts with `roborev job list --all-branches --open`; `roborev snooze on -d 2h` mutes one worktree and branch for a while.
 - **Hook state is never pruned.** Every session that runs a tool in a git repo gets an entry in `~/.roborev/agent-hook/state.json`, scripted runs in temp repos included. Clear those by id, which touches nothing live:
 
   ```bash

@@ -3,7 +3,7 @@
 # (default HEAD) in the current repo, and report whether it still blocks.
 #
 # Why: with post_commit_batch_size >= 2, the pre-push hook enqueues one range job
-# (git_ref "<checkpoint>..<head>"). `roborev wait <sha>` matches git_ref exactly
+# (git_ref "<checkpoint>..<head>"). `roborev job wait <sha>` matches git_ref exactly
 # (cmd/roborev/daemon_client.go findJobForCommit, v0.71.0), so it reports
 # "No job found" for a range head. This finds the newest review or range job
 # whose git_ref is <sha> or ends in "..<sha>", waits on that job id, then reads
@@ -46,7 +46,7 @@ trap on_exit EXIT
 finish() { result=$1; exit "$2"; }
 
 # A fatal signal doesn't reach on_exit with a 128+N status, so trap the common
-# ones. `roborev wait` runs in the background so the trap fires at once rather
+# ones. `roborev job wait` runs in the background so the trap fires at once rather
 # than after it returns; the trap stops it.
 wait_pid=""
 # shellcheck disable=SC2329  # invoked by the signal traps
@@ -69,21 +69,21 @@ command -v roborev >/dev/null || die "roborev not on PATH"
 command -v jq >/dev/null || die "jq not on PATH"
 
 sha=$(git rev-parse --verify --quiet "${ref}^{commit}") || die "not a commit in this repo: $ref"
-# roborev list resolves the repo from the working directory: right from a linked
+# roborev job list resolves the repo from the working directory: right from a linked
 # worktree's root or subdirectory, but empty from a main checkout's subdirectory
 # (roborev v0.71.0), so list from the worktree root.
 cd "$(git rev-parse --show-toplevel)" || die "could not find the worktree root"
 
 # Sets $jobs in this shell (not a subshell), so a failure reports once and exits.
 list_jobs() {
-  jobs=$(roborev list --all-branches --json --limit 200) \
-    || die "roborev list failed (daemon down?)"
+  jobs=$(roborev job list --all-branches --json --limit 200) \
+    || die "roborev job list failed (daemon down?)"
 }
 
 deadline=$(( $(date +%s) + timeout ))
 while :; do
   list_jobs
-  n_jobs=$(jq 'length' <<<"$jobs") || die "could not parse roborev list output"
+  n_jobs=$(jq 'length' <<<"$jobs") || die "could not parse roborev job list output"
   # A repo with no jobs at all isn't hooked up; waiting won't change that.
   [ "$n_jobs" -gt 0 ] || die "roborev has no jobs for this repo; run roborev init here?" 2
   job_id=$(jq -r --arg sha "$sha" '
@@ -91,7 +91,7 @@ while :; do
       | select(.job_type == "review" or .job_type == "range")
       | select(.git_ref == $sha or (.git_ref | endswith(".." + $sha))) ]
     | max_by(.id) // empty | .id' <<<"$jobs") \
-    || die "could not parse roborev list output"
+    || die "could not parse roborev job list output"
   [ -n "$job_id" ] && break
   if [ "$(date +%s)" -ge "$deadline" ]; then
     die "no review job ends at ${sha:0:7} after ${timeout}s. Was it pushed? See ~/.roborev/post-commit.log" 2
@@ -102,7 +102,7 @@ done
 echo "roborev-wait-push: ${sha:0:7} -> job $job_id" >&2
 # Prints the review; its exit code is not the answer (it is 1 for a closed FAIL
 # and for a job error alike), so the job's final state decides below.
-roborev wait --job "$job_id" &
+roborev job wait --job "$job_id" &
 wait_pid=$!
 wait "$wait_pid" || true
 wait_pid=""
@@ -110,7 +110,7 @@ wait_pid=""
 list_jobs
 state=$(jq -r --argjson id "$job_id" '
   .[] | select(.id == $id) | "\(.status) \(.verdict // "-") \(.closed // false)"' <<<"$jobs") \
-  || die "could not parse roborev list output"
+  || die "could not parse roborev job list output"
 [ -n "$state" ] || die "job $job_id is no longer listed"
 read -r status verdict closed <<<"$state"
 
@@ -123,7 +123,7 @@ if warnings=$(jq -r --argjson id "$job_id" '
     | [ .[] | select(.branch == $branch and .id != $id) ] as $others
     | ([ $others[] | select(.status == "done" and .verdict == "F" and ((.closed // false) | not)) | .id ]) as $fail
     | ([ $others[] | select(.status == "queued" or .status == "running") | .id ]) as $pending
-    | (if ($fail | length) > 0 then "branch \($branch) has \($fail | length) other open FAIL job(s): \($fail | map(tostring) | join(" ")) (roborev list --all-branches --open)" else empty end),
+    | (if ($fail | length) > 0 then "branch \($branch) has \($fail | length) other open FAIL job(s): \($fail | map(tostring) | join(" ")) (roborev job list --all-branches --open)" else empty end),
       (if ($pending | length) > 0 then "branch \($branch) has \($pending | length) other unfinished (queued or running) job(s): \($pending | map(tostring) | join(" "))" else empty end)
     ' <<<"$jobs"); then
   while IFS= read -r line; do
@@ -144,7 +144,7 @@ case "$status:$verdict:$closed" in
     echo "roborev-wait-push: job $job_id FAIL is open: fix, or comment then close" >&2
     finish "FAIL open" 1 ;;
   queued:*|running:*)
-    die "job $job_id is still $status after roborev wait returned; rerun" ;;
+    die "job $job_id is still $status after roborev job wait returned; rerun" ;;
   *)
     error=$(jq -r --argjson id "$job_id" '.[] | select(.id == $id) | .error // "(no error recorded)"' <<<"$jobs") \
       || error="(could not read the job's error)"
