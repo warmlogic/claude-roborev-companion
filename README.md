@@ -23,7 +23,7 @@ Setup, below, is done once per machine and once per repo. Day to day, Claude loa
    In a repo whose git hooks call roborev (`grep -l roborev "$(git rev-parse --git-path hooks)"/*`), after pushing, run `roborev-wait-push` and act on its verdict; load the `roborev-companion:working-with-roborev` skill first.
    ```
 
-7. **Verify**: the script is on Claude's Bash `PATH` only, so in a Claude Code session in the repo (after `/reload-plugins`, or in a new session), commit and push a small change without `[no-roborev]`, then ask Claude to run `roborev-wait-push`. It should end with `PASS (exit 0)` or `FAIL open (exit 1)`.
+7. **Verify**: the script is on Claude's Bash `PATH` only, so in a Claude Code session in the repo (after `/reload-plugins`, or in a new session), commit and push a small change without a skip marker, then ask Claude to run `roborev-wait-push`. It should end with `PASS (exit 0)` or `FAIL open (exit 1)`.
 
 ## What it provides
 
@@ -67,10 +67,10 @@ command = "<script> {agent} {job_id} {repo_name}"   # a script you write: exits 
 
   ```toml
   # .roborev.toml
-  post_commit_batch_size = 20                 # one review per push, not per commit
-  excluded_commit_patterns = ['[no-roborev]'] # a push whose every commit carries the marker isn't reviewed
-  excluded_branches = ["main"]                # branches that only receive reviewed PR merges, by exact name
-  exclude_patterns = []                       # generated and lock files that have their own drift tests, e.g. "uv.lock"
+  post_commit_batch_size = 20                              # one review per push, not per commit
+  excluded_commit_patterns = ['[trivial]', '[no-roborev]'] # skip markers: a push is skipped only when every commit carries one
+  excluded_branches = ["main"]                             # branches that only receive reviewed PR merges, by exact name
+  exclude_patterns = []                                    # generated and lock files that have their own drift tests, e.g. "uv.lock"
   ```
 
   - With batching, the post-commit hook only records commits, and the pre-push hook enqueues one range job, `<last reviewed>..<pushed head>`, before the push proceeds; a branch also flushes on its own every 20 commits. A rebase or a merge from the default branch widens the next range (the skill covers handling that).
